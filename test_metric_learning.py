@@ -14,6 +14,7 @@ from umap import UMAP
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+import time
 
 
 transforms = transforms.Compose([transforms.ToPILImage(),
@@ -73,70 +74,70 @@ def visualize_features(x_data, y_data, folder='./visualizations', return_array=F
 
 
 if __name__ == "__main__":
-    # Create the dataset object for example with the "NIC_v2 - 79 benchmark"
-    # and assuming the core50 location in ~/core50/128x128/
-    dataset = CORE50(root='core50/core50_128x128',
-                     scenario="nicv2_391", preload=False)
 
-    wandb.init(project='core50_DINO_knn')
+    for run in range(10):
 
-    # Get the fixed test set
-    test_x, test_y = dataset.get_test_set()
+        dataset = CORE50(root='core50/core50_128x128',
+                         scenario="nicv2_391", preload=False, run=run)
 
-    fe = torch.hub.load('facebookresearch/dino:main', 'dino_vits16')
-    fe.cuda()
-    fe.eval()
-    classifier = knn('core50.pth', save_to_file=False)
+        wandb.init(project='core50_DINO_knn', reinit=True)
 
-    batch_size = 32
+        # Get the fixed test set
+        test_x, test_y = dataset.get_test_set()
 
-    test_x = load_features_for_testing(fe, test_x)
+        fe = torch.hub.load('facebookresearch/dino:main', 'dino_vits16')
+        fe.cuda()
+        fe.eval()
+        classifier = knn('core50.pth', resume=False)
 
-    total_trained_classes = set()
+        batch_size = 32
 
-    # loop over the training incremental batches
-    for iteration_step, train_batch in tqdm(enumerate(dataset), total=dataset.nbatch[dataset.scenario]):
-        # WARNING train_batch is NOT a mini-batch, but one incremental batch!
-        # You can later train with SGD indexing train_x and train_y properly.
-        train_x, train_y = train_batch
+        test_x = load_features_for_testing(fe, test_x)
 
-        print('current classes: ', np.unique(train_y).astype(int))
+        # loop over the training incremental batches
+        for iteration_step, train_batch in tqdm(enumerate(dataset), total=dataset.nbatch[dataset.scenario]):
+            # WARNING train_batch is NOT a mini-batch, but one incremental batch!
+            # You can later train with SGD indexing train_x and train_y properly.
+            train_x, train_y = train_batch
 
-        # train stage
-        for i in range(train_x.shape[0] // batch_size + 1):
+            # train stage
+            for i in range(train_x.shape[0] // batch_size + 1):
 
-            x_minibatch = train_x[i*batch_size: (i+1)*batch_size]
-            y_minibatch = train_y[i*batch_size: (i+1)*batch_size]
+                x_minibatch = train_x[i*batch_size: (i+1)*batch_size]
+                y_minibatch = train_y[i*batch_size: (i+1)*batch_size]
 
-            x = [transforms(el) for el in x_minibatch.astype(np.uint8)]
-            x = torch.stack(x)
+                x = [transforms(el) for el in x_minibatch.astype(np.uint8)]
+                x = torch.stack(x)
 
-            feats = fe(x.cuda())
+                feats = fe(x.cuda())
+                classifier.add_points(feats.cpu(), y_minibatch)
 
-            classifier.add_points(feats.cpu(), y_minibatch)
+            # test stage
+            preds = np.empty((0))
 
-        # test stage
-        preds = np.empty((0))
-        for i in range(test_x.shape[0] // batch_size + 1):
-            x_minibatch = test_x[i*batch_size: (i+1)*batch_size]
-            y_minibatch = test_x[i*batch_size: (i+1)*batch_size]
+            start_time = time.time()
+            for i in range(test_x.shape[0] // batch_size + 1):
+                x_minibatch = test_x[i*batch_size: (i+1)*batch_size]
+                y_minibatch = test_x[i*batch_size: (i+1)*batch_size]
 
-            clss, confs, dists = classifier.classify(x_minibatch)
-            preds = np.concatenate((preds, clss))
+                clss, confs, dists = classifier.classify(x_minibatch)
+                preds = np.concatenate((preds, clss))
 
-        M = confusion_matrix(test_y, preds)
-        accs = M.diagonal()/M.sum(axis=1)
-        # total_trained_classes += set(train_y)
-        print(
-            f'{iteration_step}, mean accuracy: {accs.mean():.3f}')
+            duration = time.time() - start_time
 
-        logs_keys = ['accs/mean', 'accs/std']
-        logs_vals = [accs.mean(), accs.std()]
-        logs_dict = dict(zip(logs_keys, logs_vals))
+            M = confusion_matrix(test_y, preds)
+            accs = M.diagonal()/M.sum(axis=1)
+            print(
+                f'{iteration_step}, mean accuracy: {accs.mean():.3f}')
 
-        wandb.log(logs_dict, step=iteration_step)
+            logs_keys = ['accs/mean', 'accs/std', 'time to test kNN']
+            logs_vals = [accs.mean(), accs.std(), duration]
+            logs_dict = dict(zip(logs_keys, logs_vals))
 
-        # save features visualization to WanDB
-        plot = visualize_features(
-            classifier.x_data, classifier.y_data, return_array=True, iter=iteration_step)
-        wandb.log({"2D visualization": wandb.Image(plot)}, step=iteration_step)
+            wandb.log(logs_dict, step=iteration_step)
+
+            # save features visualization to WanDB
+            plot = visualize_features(
+                classifier.x_data, classifier.y_data, return_array=True, iter=iteration_step)
+            wandb.log({"2D visualization": wandb.Image(plot)},
+                      step=iteration_step)
