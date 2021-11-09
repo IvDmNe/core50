@@ -25,13 +25,15 @@ transforms = transforms.Compose([transforms.ToPILImage(),
 torch.set_grad_enabled(False)
 
 
-def load_features_for_testing(fe, test_x, batch_size=32):
-    features = torch.empty((0, 384), dtype=torch.float32)
+def load_features_for_testing(fe, test_x, features_size, batch_size=32):
 
     if pathlib.Path('test_features.pth').exists():
         print('Found saved features')
-        return torch.load('test_features.pth')
+        saved_feats = torch.load('test_features.pth')
+        if saved_feats.shape[1] == features_size:
+            return saved_feats
 
+    features = torch.empty((0, features_size), dtype=torch.float32)
     for i in tqdm(range(test_x.shape[0] // batch_size + 1)):
         x_minibatch = test_x[i*batch_size: (i+1)*batch_size]
 
@@ -148,6 +150,7 @@ if __name__ == "__main__":
 
     cfg = {
         'feature_extractor_model': 'dino_vitb16',
+        'embedding_size': 768,
         'N_neighbours': 10,
         'runs': 1
     }
