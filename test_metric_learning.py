@@ -73,71 +73,85 @@ def visualize_features(x_data, y_data, folder='./visualizations', return_array=F
         return im
 
 
+def run_experiment(run, cfg=None):
+    dataset = CORE50(root='core50/core50_128x128',
+                     scenario="nicv2_391", preload=False, run=run)
+
+    name = '_'.join(list(map(str, cfg.values())))
+
+    wandb.init(project='core50_DINO_knn', reinit=True,
+               name=name + '_' + str(run))
+
+    # Get the fixed test set
+    test_x, test_y = dataset.get_test_set()
+
+    fe = torch.hub.load('facebookresearch/dino:main',
+                        cfg['feature_extractor_model'])
+    fe.cuda()
+    fe.eval()
+    classifier = knn('core50.pth', resume=False, knn_size=cfg['N_neighbours'])
+
+    batch_size = 32
+
+    test_x = load_features_for_testing(fe, test_x)
+
+    # loop over the training incremental batches
+    for iteration_step, train_batch in tqdm(enumerate(dataset), total=dataset.nbatch[dataset.scenario]):
+        # WARNING train_batch is NOT a mini-batch, but one incremental batch!
+        # You can later train with SGD indexing train_x and train_y properly.
+        train_x, train_y = train_batch
+
+        # train stage
+        for i in range(train_x.shape[0] // batch_size + 1):
+
+            x_minibatch = train_x[i*batch_size: (i+1)*batch_size]
+            y_minibatch = train_y[i*batch_size: (i+1)*batch_size]
+
+            x = [transforms(el) for el in x_minibatch.astype(np.uint8)]
+            x = torch.stack(x)
+
+            feats = fe(x.cuda())
+            classifier.add_points(feats.cpu(), y_minibatch)
+
+        # test stage
+        preds = np.empty((0))
+
+        start_time = time.time()
+        for i in range(test_x.shape[0] // batch_size + 1):
+            x_minibatch = test_x[i*batch_size: (i+1)*batch_size]
+            y_minibatch = test_x[i*batch_size: (i+1)*batch_size]
+
+            clss, confs, dists = classifier.classify(x_minibatch)
+            preds = np.concatenate((preds, clss))
+
+        duration = time.time() - start_time
+
+        M = confusion_matrix(test_y, preds)
+        accs = M.diagonal()/M.sum(axis=1)
+        print(
+            f'{iteration_step}, mean accuracy: {accs.mean():.3f}')
+
+        logs_keys = ['accs/mean', 'accs/std', 'time to test kNN']
+        logs_vals = [accs.mean(), accs.std(), duration]
+        logs_dict = dict(zip(logs_keys, logs_vals))
+
+        wandb.log(logs_dict, step=iteration_step)
+
+        # save features visualization to WanDB
+        plot = visualize_features(
+            classifier.x_data, classifier.y_data, return_array=True, iter=iteration_step)
+        wandb.log({"2D visualization": wandb.Image(plot)},
+                  step=iteration_step)
+
+
 if __name__ == "__main__":
+
+    cfg = {
+        'feature_extractor_model': 'dino_vits16',
+        'N_neighbours': 10,
+
+    }
 
     for run in range(10):
 
-        dataset = CORE50(root='core50/core50_128x128',
-                         scenario="nicv2_391", preload=False, run=run)
-
-        wandb.init(project='core50_DINO_knn', reinit=True)
-
-        # Get the fixed test set
-        test_x, test_y = dataset.get_test_set()
-
-        fe = torch.hub.load('facebookresearch/dino:main', 'dino_vits16')
-        fe.cuda()
-        fe.eval()
-        classifier = knn('core50.pth', resume=False)
-
-        batch_size = 32
-
-        test_x = load_features_for_testing(fe, test_x)
-
-        # loop over the training incremental batches
-        for iteration_step, train_batch in tqdm(enumerate(dataset), total=dataset.nbatch[dataset.scenario]):
-            # WARNING train_batch is NOT a mini-batch, but one incremental batch!
-            # You can later train with SGD indexing train_x and train_y properly.
-            train_x, train_y = train_batch
-
-            # train stage
-            for i in range(train_x.shape[0] // batch_size + 1):
-
-                x_minibatch = train_x[i*batch_size: (i+1)*batch_size]
-                y_minibatch = train_y[i*batch_size: (i+1)*batch_size]
-
-                x = [transforms(el) for el in x_minibatch.astype(np.uint8)]
-                x = torch.stack(x)
-
-                feats = fe(x.cuda())
-                classifier.add_points(feats.cpu(), y_minibatch)
-
-            # test stage
-            preds = np.empty((0))
-
-            start_time = time.time()
-            for i in range(test_x.shape[0] // batch_size + 1):
-                x_minibatch = test_x[i*batch_size: (i+1)*batch_size]
-                y_minibatch = test_x[i*batch_size: (i+1)*batch_size]
-
-                clss, confs, dists = classifier.classify(x_minibatch)
-                preds = np.concatenate((preds, clss))
-
-            duration = time.time() - start_time
-
-            M = confusion_matrix(test_y, preds)
-            accs = M.diagonal()/M.sum(axis=1)
-            print(
-                f'{iteration_step}, mean accuracy: {accs.mean():.3f}')
-
-            logs_keys = ['accs/mean', 'accs/std', 'time to test kNN']
-            logs_vals = [accs.mean(), accs.std(), duration]
-            logs_dict = dict(zip(logs_keys, logs_vals))
-
-            wandb.log(logs_dict, step=iteration_step)
-
-            # save features visualization to WanDB
-            plot = visualize_features(
-                classifier.x_data, classifier.y_data, return_array=True, iter=iteration_step)
-            wandb.log({"2D visualization": wandb.Image(plot)},
-                      step=iteration_step)
+        run_experiment(run, cfg)
