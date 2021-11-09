@@ -74,7 +74,7 @@ def visualize_features(x_data, y_data, folder='./visualizations', return_array=F
 
 
 def run_experiment(run, cfg=None):
-    dataset = CORE50(root='core50/core50_128x128',
+    dataset = CORE50(root='core50_dataset/core50_128x128',
                      scenario="nicv2_391", preload=False, run=run)
 
     name = '_'.join(list(map(str, cfg.values())))
