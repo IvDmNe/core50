@@ -80,7 +80,7 @@ def run_experiment(run, cfg=None):
     name = '_'.join(list(map(str, cfg.values())))
 
     wandb.init(project='core50_DINO_knn', reinit=True,
-               name=name + '_' + str(run))
+               name=name + '_' + str(run), config=cfg)
 
     # Get the fixed test set
     test_x, test_y = dataset.get_test_set()
@@ -131,8 +131,8 @@ def run_experiment(run, cfg=None):
         print(
             f'{iteration_step}, mean accuracy: {accs.mean():.3f}')
 
-        logs_keys = ['accs/mean', 'accs/std', 'time to test kNN']
-        logs_vals = [accs.mean(), accs.std(), duration]
+        logs_keys = ['accs/mean', 'accs/std', 'time to test kNN', 'data size']
+        logs_vals = [accs.mean(), accs.std(), duration, len(classifier.x_data)]
         logs_dict = dict(zip(logs_keys, logs_vals))
 
         wandb.log(logs_dict, step=iteration_step)
@@ -147,11 +147,11 @@ def run_experiment(run, cfg=None):
 if __name__ == "__main__":
 
     cfg = {
-        'feature_extractor_model': 'dino_vits16',
+        'feature_extractor_model': 'dino_vitb16',
         'N_neighbours': 10,
-
+        'runs': 1
     }
 
-    for run in range(10):
+    for run in range(cfg['runs']):
 
         run_experiment(run, cfg)
