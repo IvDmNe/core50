@@ -95,7 +95,7 @@ def run_experiment(run, cfg=None):
 
     batch_size = 32
 
-    test_x = load_features_for_testing(fe, test_x)
+    test_x = load_features_for_testing(fe, test_x, cfg['embedding_size'])
 
     # loop over the training incremental batches
     for iteration_step, train_batch in tqdm(enumerate(dataset), total=dataset.nbatch[dataset.scenario]):
