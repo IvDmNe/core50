@@ -71,7 +71,7 @@ class knn:
 
         self.faiss_index.add(self.x_data)
         if self.save_to_file:
-            torch.save({'x': self.x_data.detach().cpu(),
+            torch.save({'x': self.x_data,
                         'y': self.y_data}, self.save_file)
 
     def classify(self, x):
