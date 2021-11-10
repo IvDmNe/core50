@@ -16,11 +16,25 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import time
 
+aug_transforms = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.RandomAdjustSharpness(
+        sharpness_factor=2),
+    transforms.RandomAutocontrast(),
+    transforms.RandomResizedCrop(
+        scale=(0.16, 1), ratio=(0.75, 1.33), size=224),
+    transforms.RandomHorizontalFlip(0.5),
+    transforms.RandomVerticalFlip(0.5),
+    transforms.Resize(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 
-transforms = transforms.Compose([transforms.ToPILImage(),
-                                transforms.Resize(224),
-                                transforms.ToTensor(),
-                                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+std_transforms = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+
 
 torch.set_grad_enabled(False)
 
@@ -37,7 +51,7 @@ def load_features_for_testing(fe, test_x, features_size, batch_size=32):
     for i in tqdm(range(test_x.shape[0] // batch_size + 1)):
         x_minibatch = test_x[i*batch_size: (i+1)*batch_size]
 
-        x = [transforms(el) for el in x_minibatch.astype(np.uint8)]
+        x = [std_transforms(el) for el in x_minibatch.astype(np.uint8)]
         x = torch.stack(x)
 
         feats = fe(x.cuda()).cpu()
@@ -81,11 +95,14 @@ def run_experiment(run, cfg=None):
 
     name = '_'.join(list(map(str, cfg.values())))
 
-    wandb.init(project='core50_DINO_knn', reinit=True,
-               name=name + '_' + str(run), config=cfg)
+    # wandb.init(project='core50_DINO_knn', reinit=True,
+    #            name=name + '_' + str(run) + '_augmentation', config=cfg)
+
+    transforms = aug_transforms if cfg['augmentation'] else std_transforms
 
     # Get the fixed test set
     test_x, test_y = dataset.get_test_set()
+    # print(test_x.shape)
 
     fe = torch.hub.load('facebookresearch/dino:main',
                         cfg['feature_extractor_model'])
@@ -95,7 +112,8 @@ def run_experiment(run, cfg=None):
 
     batch_size = 32
 
-    test_x = load_features_for_testing(fe, test_x, cfg['embedding_size'])
+    test_x = load_features_for_testing(
+        fe, test_x, cfg['embedding_size'], batch_size=batch_size)
 
     # loop over the training incremental batches
     for iteration_step, train_batch in tqdm(enumerate(dataset), total=dataset.nbatch[dataset.scenario]):
@@ -104,24 +122,26 @@ def run_experiment(run, cfg=None):
         train_x, train_y = train_batch
 
         # train stage
-        for i in range(train_x.shape[0] // batch_size + 1):
+        for _ in range(4):
+            for i in range(train_x.shape[0] // batch_size + 1):
 
-            x_minibatch = train_x[i*batch_size: (i+1)*batch_size]
-            y_minibatch = train_y[i*batch_size: (i+1)*batch_size]
+                x_minibatch = train_x[i*batch_size: (i+1)*batch_size]
+                y_minibatch = train_y[i*batch_size: (i+1)*batch_size]
 
-            x = [transforms(el) for el in x_minibatch.astype(np.uint8)]
-            x = torch.stack(x)
+                x = [transforms(el)
+                     for el in x_minibatch.astype(np.uint8)]
+                x = torch.stack(x)
 
-            feats = fe(x.cuda())
-            classifier.add_points(feats.cpu(), y_minibatch)
+                feats = fe(x.cuda())
+                classifier.add_points(feats.cpu(), y_minibatch)
 
         # test stage
         preds = np.empty((0))
 
         start_time = time.time()
-        for i in range(test_x.shape[0] // batch_size + 1):
-            x_minibatch = test_x[i*batch_size: (i+1)*batch_size]
-            y_minibatch = test_x[i*batch_size: (i+1)*batch_size]
+        for i in tqdm(range(test_x.shape[0])):
+            x_minibatch = test_x[i].unsqueeze(0)
+            y_minibatch = test_x[i].unsqueeze(0)
 
             clss, confs, dists = classifier.classify(x_minibatch)
             preds = np.concatenate((preds, clss))
@@ -137,22 +157,23 @@ def run_experiment(run, cfg=None):
         logs_vals = [accs.mean(), accs.std(), duration, len(classifier.x_data)]
         logs_dict = dict(zip(logs_keys, logs_vals))
 
-        wandb.log(logs_dict, step=iteration_step)
+        # wandb.log(logs_dict, step=iteration_step)
 
-        # save features visualization to WanDB
-        plot = visualize_features(
-            classifier.x_data, classifier.y_data, return_array=True, iter=iteration_step)
-        wandb.log({"2D visualization": wandb.Image(plot)},
-                  step=iteration_step)
+        # # save features visualization to WanDB
+        # plot = visualize_features(
+        #     classifier.x_data, classifier.y_data, return_array=True, iter=iteration_step)
+        # wandb.log({"2D visualization": wandb.Image(plot)},
+        #           step=iteration_step)
 
 
 if __name__ == "__main__":
 
     cfg = {
-        'feature_extractor_model': 'dino_vitb16',
-        'embedding_size': 768,
+        'feature_extractor_model': 'dino_vits16',
+        'embedding_size': 384,
         'N_neighbours': 10,
-        'runs': 1
+        'runs': 1,
+        'augmentation': True
     }
 
     for run in range(cfg['runs']):
