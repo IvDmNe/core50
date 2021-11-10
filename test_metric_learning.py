@@ -95,8 +95,8 @@ def run_experiment(run, cfg=None):
 
     name = '_'.join(list(map(str, cfg.values())))
 
-    # wandb.init(project='core50_DINO_knn', reinit=True,
-    #            name=name + '_' + str(run) + '_augmentation', config=cfg)
+    wandb.init(project='core50_DINO_knn', reinit=True,
+               name=name + '_' + str(run) + '_augmentation', config=cfg)
 
     transforms = aug_transforms if cfg['augmentation'] else std_transforms
 
@@ -110,13 +110,14 @@ def run_experiment(run, cfg=None):
     fe.eval()
     classifier = knn('core50.pth', resume=False, knn_size=cfg['N_neighbours'])
 
-    batch_size = 32
+    batch_size = 128
 
     test_x = load_features_for_testing(
         fe, test_x, cfg['embedding_size'], batch_size=batch_size)
 
     # loop over the training incremental batches
-    for iteration_step, train_batch in tqdm(enumerate(dataset), total=dataset.nbatch[dataset.scenario]):
+    total_pbar = tqdm(enumerate(dataset), total=dataset.nbatch[dataset.scenario])
+    for iteration_step, train_batch in total_pbar:
         # WARNING train_batch is NOT a mini-batch, but one incremental batch!
         # You can later train with SGD indexing train_x and train_y properly.
         train_x, train_y = train_batch
@@ -139,9 +140,9 @@ def run_experiment(run, cfg=None):
         preds = np.empty((0))
 
         start_time = time.time()
-        for i in tqdm(range(test_x.shape[0])):
-            x_minibatch = test_x[i].unsqueeze(0)
-            y_minibatch = test_x[i].unsqueeze(0)
+        for i in tqdm(range(test_x.shape[0] // batch_size + 1), desc='test'):
+            x_minibatch = test_x[i*batch_size: (i+1)*batch_size]
+            y_minibatch = test_y[i*batch_size: (i+1)*batch_size]
 
             clss, confs, dists = classifier.classify(x_minibatch)
             preds = np.concatenate((preds, clss))
@@ -150,14 +151,14 @@ def run_experiment(run, cfg=None):
 
         M = confusion_matrix(test_y, preds)
         accs = M.diagonal()/M.sum(axis=1)
-        print(
-            f'{iteration_step}, mean accuracy: {accs.mean():.3f}')
+        total_pbar.set_description(f'{iteration_step}, acc: {accs.mean():.3f}')
+
 
         logs_keys = ['accs/mean', 'accs/std', 'time to test kNN', 'data size']
         logs_vals = [accs.mean(), accs.std(), duration, len(classifier.x_data)]
         logs_dict = dict(zip(logs_keys, logs_vals))
 
-        # wandb.log(logs_dict, step=iteration_step)
+        wandb.log(logs_dict, step=iteration_step)
 
         # # save features visualization to WanDB
         # plot = visualize_features(
