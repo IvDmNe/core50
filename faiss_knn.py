@@ -77,7 +77,7 @@ class knn:
     def classify(self, x):
         if not isinstance(x, np.ndarray):
             x = np.array(x)
-        D, I = self.faiss_index.search(x, self.knn_size)
+        D, I = self.faiss_index.search(x.astype(np.float32), self.knn_size)
 
         # print(self.y_data[I])
 

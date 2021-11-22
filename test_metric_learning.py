@@ -39,11 +39,11 @@ std_transforms = transforms.Compose([
 torch.set_grad_enabled(False)
 
 
-def load_features_for_testing(fe, test_x, features_size, batch_size=32):
+def load_features_for_testing(fe, test_x, features_size, batch_size=32, postfix=None):
 
-    if pathlib.Path('test_features.pth').exists():
+    if pathlib.Path(f'test_features{postfix}.pth').exists():
         print('Found saved features')
-        saved_feats = torch.load('test_features.pth')
+        saved_feats = torch.load(f'test_features{postfix}.pth')
         if saved_feats.shape[1] == features_size:
             return saved_feats
 
@@ -57,7 +57,7 @@ def load_features_for_testing(fe, test_x, features_size, batch_size=32):
         feats = fe(x.cuda()).cpu()
 
         features = torch.cat((features, feats))
-    torch.save(features, 'test_features.pth')
+    torch.save(features, f'test_features{postfix}.pth')
     return features
 
 
@@ -93,10 +93,18 @@ def run_experiment(run, cfg=None):
     dataset = CORE50(root='core50_dataset/core50_128x128',
                      scenario="nicv2_391", preload=False, run=run)
 
-    name = '_'.join(list(map(str, cfg.values())))
+    # set name for experiment
+    name = f"{cfg['feature_extractor_model']}_{cfg['embedding_size']}_{cfg['N_neighbours']}n_{cfg['runs']}r"
+    if cfg['augmentation']:
+        name += '_aug'
+    if cfg['pca']:
+        name += f'_{cfg["pca"].split("_")[1]}pca'
+    # name = '_'.join(list(map(str, cfg.values())))
+
+    print(name)
 
     wandb.init(project='core50_DINO_knn', reinit=True,
-               name=name + '_' + str(run) + '_augmentation', config=cfg)
+               name=name + '_' + str(run), config=cfg)
 
     transforms = aug_transforms if cfg['augmentation'] else std_transforms
 
@@ -110,10 +118,20 @@ def run_experiment(run, cfg=None):
     fe.eval()
     classifier = knn('core50.pth', resume=False, knn_size=cfg['N_neighbours'])
 
-    batch_size = 128
+    batch_size = 64
 
     test_x = load_features_for_testing(
-        fe, test_x, cfg['embedding_size'], batch_size=batch_size)
+        fe, test_x, cfg['embedding_size'], batch_size=batch_size, postfix=f'_{cfg["feature_extractor_model"]}')
+
+    # prepare pca 
+    if cfg['pca']:
+        pca_size = cfg['pca'].split('_')[2]
+        pca_trained_arch = cfg['pca'].split('_')[-1][:-4]
+        print(pca_trained_arch)
+        pca=  torch.load(cfg['pca'])
+
+        assert cfg['feature_extractor_model'].split('_')[-1] == pca_trained_arch
+        test_x = pca.transform(test_x.numpy().astype(np.float32))
 
     # loop over the training incremental batches
     total_pbar = tqdm(enumerate(dataset), total=dataset.nbatch[dataset.scenario])
@@ -122,19 +140,23 @@ def run_experiment(run, cfg=None):
         # You can later train with SGD indexing train_x and train_y properly.
         train_x, train_y = train_batch
 
+
         # train stage
-        for _ in range(4):
-            for i in range(train_x.shape[0] // batch_size + 1):
+        
+        # for _ in range(4):
+        for i in range(train_x.shape[0] // batch_size + 1):
 
-                x_minibatch = train_x[i*batch_size: (i+1)*batch_size]
-                y_minibatch = train_y[i*batch_size: (i+1)*batch_size]
+            x_minibatch = train_x[i*batch_size: (i+1)*batch_size]
+            y_minibatch = train_y[i*batch_size: (i+1)*batch_size]
 
-                x = [transforms(el)
-                     for el in x_minibatch.astype(np.uint8)]
-                x = torch.stack(x)
+            x = [transforms(el)
+                    for el in x_minibatch.astype(np.uint8)]
+            x = torch.stack(x)
 
-                feats = fe(x.cuda())
-                classifier.add_points(feats.cpu(), y_minibatch)
+            feats = fe(x.cuda())
+            if cfg['pca']:
+                feats = pca.transform(feats.cpu().numpy())
+            classifier.add_points(feats.astype(np.float32), y_minibatch)
 
         # test stage
         preds = np.empty((0))
@@ -174,8 +196,12 @@ if __name__ == "__main__":
         'embedding_size': 384,
         'N_neighbours': 10,
         'runs': 1,
-        'augmentation': True
+        'augmentation': False,
+        'pca': 'PCA_90_features_vits16.pth'
     }
+
+
+
 
     for run in range(cfg['runs']):
 
