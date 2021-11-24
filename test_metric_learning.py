@@ -98,7 +98,7 @@ def run_experiment(run, cfg=None):
     if cfg['augmentation']:
         name += '_aug'
     if cfg['pca']:
-        name += f'_{cfg["pca"].split("_")[1]}pca'
+        name += f'_{cfg["pca"].split("_")[2]}pca'
     # name = '_'.join(list(map(str, cfg.values())))
 
     print(name)
@@ -118,7 +118,7 @@ def run_experiment(run, cfg=None):
     fe.eval()
     classifier = knn('core50.pth', resume=False, knn_size=cfg['N_neighbours'])
 
-    batch_size = 64
+    batch_size = 512
 
     test_x = load_features_for_testing(
         fe, test_x, cfg['embedding_size'], batch_size=batch_size, postfix=f'_{cfg["feature_extractor_model"]}')
@@ -153,18 +153,19 @@ def run_experiment(run, cfg=None):
                     for el in x_minibatch.astype(np.uint8)]
             x = torch.stack(x)
 
-            feats = fe(x.cuda())
+            feats = fe(x.cuda()).cpu()
             if cfg['pca']:
-                feats = pca.transform(feats.cpu().numpy())
-            classifier.add_points(feats.astype(np.float32), y_minibatch)
+                feats = pca.transform(feats.numpy()).astype(np.float32)
+            classifier.add_points(feats, y_minibatch)
 
         # test stage
         preds = np.empty((0))
 
+        test_batch_size = 4096 * 8
         start_time = time.time()
-        for i in tqdm(range(test_x.shape[0] // batch_size + 1), desc='test'):
-            x_minibatch = test_x[i*batch_size: (i+1)*batch_size]
-            y_minibatch = test_y[i*batch_size: (i+1)*batch_size]
+        for i in tqdm(range(test_x.shape[0] // test_batch_size + 1), desc='test'):
+            x_minibatch = test_x[i*test_batch_size: (i+1)*test_batch_size]
+            y_minibatch = test_y[i*test_batch_size: (i+1)*test_batch_size]
 
             clss, confs, dists = classifier.classify(x_minibatch)
             preds = np.concatenate((preds, clss))
@@ -190,19 +191,22 @@ def run_experiment(run, cfg=None):
 
 
 if __name__ == "__main__":
+    # archs = ['dino_vitb8', #'dino_xcit_small_12_p8'
+    # ]
 
-    cfg = {
-        'feature_extractor_model': 'dino_vits16',
-        'embedding_size': 384,
-        'N_neighbours': 10,
-        'runs': 1,
-        'augmentation': False,
-        'pca': 'PCA_90_features_vits16.pth'
-    }
+    fs = os.listdir('pca')
+    fs.sort(key=lambda x: int(x.split('_')[2]))
+    for pca in fs[-4:]:
 
+        cfg = {
+            'feature_extractor_model': 'dino_vits16',
+            'embedding_size': 384,
+            'N_neighbours': 10,
+            'runs': 1,
+            'augmentation': False,
+            'pca': 'pca/'+ pca
+        }
 
+        for run in range(cfg['runs']):
 
-
-    for run in range(cfg['runs']):
-
-        run_experiment(run, cfg)
+            run_experiment(run, cfg)
